@@ -20,7 +20,7 @@ jobs:
 
       - name: Deploy application
         run: |
-          docker build -t comp7940-bot:latest ./comp7940-lab
+          docker build -t comp7940-bot:latest .
           docker save comp7940-bot:latest | gzip | ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} 'gunzip | docker load'
           ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
           set -e
