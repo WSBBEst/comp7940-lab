@@ -22,8 +22,11 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
           cd ~/chatbot_comp7940
+          if ! command -v git >/dev/null 2>&1; then
+            sudo dnf -y install git || sudo yum -y install git
+          fi
           git pull origin main
-          docker build -t comp7940-bot:latest ./comp7940-lab
+          docker build -t comp7940-bot:latest .
           docker rm -f comp7940-bot || true
           docker run -d --restart=always --name comp7940-bot --env-file ~/chatbot_comp7940/.env comp7940-bot:latest
           EOF
