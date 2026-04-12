@@ -20,13 +20,19 @@ jobs:
 
       - name: Deploy application
         run: |
+          docker build -t comp7940-bot:latest ./comp7940-lab
+          docker save comp7940-bot:latest | gzip | ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} 'gunzip | docker load'
           ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
-          cd ~/chatbot_comp7940
-          if ! command -v git >/dev/null 2>&1; then
-            sudo dnf -y install git || sudo yum -y install git
+          set -e
+          if ! command -v docker >/dev/null 2>&1; then
+            sudo dnf -y install docker || sudo yum -y install docker
+            sudo systemctl enable --now docker
           fi
-          git pull origin main
-          docker build -t comp7940-bot:latest .
-          docker rm -f comp7940-bot || true
-          docker run -d --restart=always --name comp7940-bot --env-file ~/chatbot_comp7940/.env comp7940-bot:latest
+          if [ ! -f "$HOME/chatbot_comp7940/.env" ]; then
+            echo "Missing $HOME/chatbot_comp7940/.env"
+            exit 1
+          fi
+          docker rm -f comp7940-bot >/dev/null 2>&1 || sudo docker rm -f comp7940-bot >/dev/null 2>&1 || true
+          docker run -d --restart=always --name comp7940-bot --env-file "$HOME/chatbot_comp7940/.env" comp7940-bot:latest \
+            || sudo docker run -d --restart=always --name comp7940-bot --env-file "$HOME/chatbot_comp7940/.env" comp7940-bot:latest
           EOF
