@@ -13,6 +13,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: CI checks
+        run: |
+          python -m py_compile *.py
+
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.7.0
         with:
@@ -22,17 +26,27 @@ jobs:
         run: |
           docker build -t comp7940-bot:latest .
           docker save comp7940-bot:latest | gzip | ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} 'gunzip | docker load'
+          scp -o StrictHostKeyChecking=no docker-compose.yml nginx.conf ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/chatbot_comp7940/
           ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
           set -e
           if ! command -v docker >/dev/null 2>&1; then
             sudo dnf -y install docker || sudo yum -y install docker
             sudo systemctl enable --now docker
           fi
+          if docker compose version >/dev/null 2>&1; then
+            true
+          else
+            sudo dnf -y install docker-compose-plugin || sudo yum -y install docker-compose-plugin || true
+          fi
           if [ ! -f "$HOME/chatbot_comp7940/.env" ]; then
             echo "Missing $HOME/chatbot_comp7940/.env"
             exit 1
           fi
           docker rm -f comp7940-bot >/dev/null 2>&1 || sudo docker rm -f comp7940-bot >/dev/null 2>&1 || true
-          docker run -d --restart=always --name comp7940-bot --env-file "$HOME/chatbot_comp7940/.env" comp7940-bot:latest \
-            || sudo docker run -d --restart=always --name comp7940-bot --env-file "$HOME/chatbot_comp7940/.env" comp7940-bot:latest
+          cd "$HOME/chatbot_comp7940"
+          if docker compose version >/dev/null 2>&1; then
+            docker compose up -d --remove-orphans --scale bot=2
+          else
+            docker-compose up -d --remove-orphans --scale bot=2
+          fi
           EOF

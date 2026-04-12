@@ -33,6 +33,7 @@ def init_db(database_url: str) -> psycopg.Connection:
             CREATE TABLE IF NOT EXISTS chat_logs (
                 id BIGSERIAL PRIMARY KEY,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                update_id BIGINT,
                 telegram_user_id BIGINT,
                 telegram_chat_id BIGINT,
                 telegram_message_id BIGINT,
@@ -45,11 +46,20 @@ def init_db(database_url: str) -> psycopg.Connection:
             )
             """
         )
+        cur.execute("ALTER TABLE chat_logs ADD COLUMN IF NOT EXISTS update_id BIGINT")
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS chat_logs_update_id_uniq
+            ON chat_logs(update_id)
+            WHERE update_id IS NOT NULL
+            """
+        )
     return conn
 
 def log_chat_event(
     conn: psycopg.Connection,
     *,
+    update_id: int | None,
     telegram_user_id: int | None,
     telegram_chat_id: int | None,
     telegram_message_id: int | None,
@@ -64,6 +74,7 @@ def log_chat_event(
         cur.execute(
             """
             INSERT INTO chat_logs (
+                update_id,
                 telegram_user_id,
                 telegram_chat_id,
                 telegram_message_id,
@@ -74,9 +85,11 @@ def log_chat_event(
                 is_error,
                 error_message
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (update_id) DO NOTHING
             """,
             (
+                update_id,
                 telegram_user_id,
                 telegram_chat_id,
                 telegram_message_id,
@@ -116,6 +129,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             llm_model = os.getenv("CHATGPT_MODEL")
             log_chat_event(
                 db_conn,
+                update_id=update.update_id,
                 telegram_user_id=(update.effective_user.id if update.effective_user else None),
                 telegram_chat_id=(update.effective_chat.id if update.effective_chat else None),
                 telegram_message_id=(update.message.message_id if update.message else None),
@@ -129,29 +143,12 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.error(f"DB logging failed: {e}")
 
-async def main():
-    # Load the configuration data from file
-    logging.info('INIT: Loading configuration...')
-    config = configparser.ConfigParser()
-    config.read('config.ini')
-    token = get_config_value(config, "TELEGRAM", "ACCESS_TOKEN", "TELEGRAM_ACCESS_TOKEN", required=True)
-    global gpt
-    gpt = ChatGPT(config)
-    database_url = get_config_value(config, "DATABASE", "URL", "DATABASE_URL", required=True)
-    global db_conn
-    db_conn = init_db(database_url)
-    # Create an Application for your bot
-    logging.info('INIT: Connecting the Telegram bot...')
+def build_application(token: str):
     app = ApplicationBuilder().token(token).build()
 
-    # Create an event to stop the bot gracefully
-    stop_event = asyncio.Event()
-
-    # Define a handler for the /stop command
     async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Stopping bot...")
-        logging.info("Stopping bot via /stop command")
-        stop_event.set()
+        context.application.stop_running()
 
     async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         global db_conn
@@ -181,32 +178,46 @@ async def main():
             logging.error(f"Stats query failed: {e}")
             await update.message.reply_text("Stats query failed.")
 
-    # Register handlers
-    logging.info('INIT: Registering handlers...')
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("status", stats_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, callback))
+    return app
 
-    # Start the bot
-    logging.info('INIT: Initialization done!')
-    
-    # Explicitly initialize the application and start polling
-    # This avoids "ExtBot is not properly initialized" errors
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    
-    # Keep the bot running until stopped
-    logging.info('Bot is running... Press Ctrl+C to stop.')
-    
+def main():
+    # Load the configuration data from file
+    logging.info('INIT: Loading configuration...')
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+    token = get_config_value(config, "TELEGRAM", "ACCESS_TOKEN", "TELEGRAM_ACCESS_TOKEN", required=True)
+    global gpt
+    gpt = ChatGPT(config)
+    database_url = get_config_value(config, "DATABASE", "URL", "DATABASE_URL", required=True)
+    global db_conn
+    db_conn = init_db(database_url)
+    logging.info('INIT: Connecting the Telegram bot...')
+    app = build_application(token)
+    mode = (os.getenv("TELEGRAM_MODE") or "polling").lower()
     try:
-        await stop_event.wait()
-    except asyncio.CancelledError:
-        logging.info("Stopping bot due to cancellation...")
+        if mode == "webhook":
+            port = int(os.getenv("PORT") or "8080")
+            url_path = (os.getenv("TELEGRAM_WEBHOOK_PATH") or "telegram").lstrip("/")
+            base_url = os.getenv("TELEGRAM_WEBHOOK_URL")
+            if base_url is None or base_url == "":
+                raise ValueError("Missing required config: env TELEGRAM_WEBHOOK_URL")
+            webhook_url = base_url.rstrip("/") + "/" + url_path
+            secret_token = os.getenv("TELEGRAM_WEBHOOK_SECRET") or None
+            app.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                url_path=url_path,
+                webhook_url=webhook_url,
+                secret_token=secret_token,
+                drop_pending_updates=True,
+            )
+        else:
+            app.run_polling(drop_pending_updates=True)
     finally:
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
         if db_conn is not None:
             try:
                 db_conn.close()
@@ -215,6 +226,6 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         pass
