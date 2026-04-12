@@ -1,15 +1,28 @@
 import httpx
 import configparser
 import logging
+import os
 
 # A simple client for the ChatGPT REST API
 class ChatGPT:
     def __init__(self, config):
+        def get_config_value(section: str, key: str, env_var: str, *, default: str | None = None, required: bool = False) -> str | None:
+            value = os.getenv(env_var)
+            if value is not None and value != "":
+                return value
+            if config.has_option(section, key):
+                raw = config.get(section, key)
+                if raw != "":
+                    return raw
+            if required:
+                raise ValueError(f"Missing required config: env {env_var} or [{section}] {key}")
+            return default
+
         # Read API configuration values from the ini file
-        api_key = config['CHATGPT']['API_KEY']
-        base_url = config['CHATGPT']['BASE_URL']
-        model = config['CHATGPT']['MODEL']
-        api_ver = config['CHATGPT']['API_VER']
+        api_key = get_config_value("CHATGPT", "API_KEY", "CHATGPT_API_KEY", required=True)
+        base_url = get_config_value("CHATGPT", "BASE_URL", "CHATGPT_BASE_URL", default="https://genai.hkbu.edu.hk/api/v0/rest", required=True)
+        model = get_config_value("CHATGPT", "MODEL", "CHATGPT_MODEL", default="gpt-5-mini", required=True)
+        api_ver = get_config_value("CHATGPT", "API_VER", "CHATGPT_API_VER", default="2024-12-01-preview", required=True)
 
         # Construct the full REST endpoint URL for chat completions
         self.url = f'{base_url}/deployments/{model}/chat/completions?api-version={api_ver}'
