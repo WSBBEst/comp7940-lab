@@ -86,7 +86,7 @@ def log_chat_event(
                 error_message
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (update_id) DO NOTHING
+            ON CONFLICT (update_id) WHERE update_id IS NOT NULL DO NOTHING
             """,
             (
                 update_id,
