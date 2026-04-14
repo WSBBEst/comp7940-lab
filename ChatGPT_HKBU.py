@@ -46,11 +46,10 @@ class ChatGPT:
         # httpx often handles proxies better than requests, especially in complex network environments
         self.client = httpx.Client(verify=False, timeout=60.0)
 
-    def submit(self, user_message: str):
-        
+    def submit_with_system(self, user_message: str, system_message: str):
         # Build the conversation history: system + user message
         messages = [
-            {"role": "system", "content": self.system_message},
+            {"role": "system", "content": system_message},
             {"role": "user", "content": user_message},
         ]
 
@@ -75,6 +74,9 @@ class ChatGPT:
                 return "Error: " + response.text
         except Exception as e:
             return f"Error connecting to ChatGPT: {str(e)}"
+
+    def submit(self, user_message: str):
+        return self.submit_with_system(user_message, self.system_message)
     
 
 if __name__ == '__main__':
